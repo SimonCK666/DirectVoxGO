@@ -53,7 +53,7 @@ class DirectVoxGO(torch.nn.Module):
         # init density voxel grid
         self.density_type = density_type
         self.density_config = density_config
-        self.density = grid.create_grid(
+        self.density = grid.create_grid(    # 创造一个 Volume
                 density_type, channels=1, world_size=self.world_size,
                 xyz_min=self.xyz_min, xyz_max=self.xyz_max,
                 config=self.density_config)
@@ -94,7 +94,7 @@ class DirectVoxGO(torch.nn.Module):
             elif rgbnet_direct:
                 dim0 += self.k0_dim
             else:
-                dim0 += self.k0_dim-3
+                dim0 += self.k0_dim-3       # dim 从 voxel 压平，过 MLP
             self.rgbnet = nn.Sequential(
                 nn.Linear(dim0, rgbnet_width), nn.ReLU(inplace=True),
                 *[
@@ -197,7 +197,7 @@ class DirectVoxGO(torch.nn.Module):
         print('dvgo: scale_volume_grid finish')
 
     @torch.no_grad()
-    def update_occupancy_cache(self):
+    def update_occupancy_cache(self):   # change or del
         cache_grid_xyz = torch.stack(torch.meshgrid(
             torch.linspace(self.xyz_min[0], self.xyz_max[0], self.mask_cache.mask.shape[0]),
             torch.linspace(self.xyz_min[1], self.xyz_max[1], self.mask_cache.mask.shape[1]),
@@ -261,7 +261,7 @@ class DirectVoxGO(torch.nn.Module):
         rays_o = rays_o.reshape(-1, 3).contiguous()
         rays_d = rays_d.reshape(-1, 3).contiguous()
         stepdist = stepsize * self.voxel_size
-        ray_pts, mask_outbbox, ray_id = render_utils_cuda.sample_pts_on_rays(
+        ray_pts, mask_outbbox, ray_id = render_utils_cuda.sample_pts_on_rays( # sample rays
                 rays_o, rays_d, self.xyz_min, self.xyz_max, near, far, stepdist)[:3]
         mask_inbbox = ~mask_outbbox
         hit = torch.zeros([len(rays_o)], dtype=torch.bool)
@@ -306,18 +306,18 @@ class DirectVoxGO(torch.nn.Module):
         # sample points on rays
         ray_pts, ray_id, step_id = self.sample_ray(
                 rays_o=rays_o, rays_d=rays_d, **render_kwargs)
-        interval = render_kwargs['stepsize'] * self.voxel_size_ratio
+        interval = render_kwargs['stepsize'] * self.voxel_size_ratio        # 每次拿几个 voxel
 
         # skip known free space
-        if self.mask_cache is not None:
-            mask = self.mask_cache(ray_pts)
+        if self.mask_cache is not None:     # 打 mask，物体之外的光线被略除
+            mask = self.mask_cache(ray_pts) # 查看 mask 和 image 的大小？
             ray_pts = ray_pts[mask]
             ray_id = ray_id[mask]
             step_id = step_id[mask]
 
         # query for alpha w/ post-activation
         density = self.density(ray_pts)
-        alpha = self.activate_density(density, interval)
+        alpha = self.activate_density(density, interval)        # Eq. 2b
         if self.fast_color_thres > 0:
             mask = (alpha > self.fast_color_thres)
             ray_pts = ray_pts[mask]
@@ -327,20 +327,20 @@ class DirectVoxGO(torch.nn.Module):
             alpha = alpha[mask]
 
         # compute accumulated transmittance
-        weights, alphainv_last = Alphas2Weights.apply(alpha, ray_id, N)
+        weights, alphainv_last = Alphas2Weights.apply(alpha, ray_id, N)     # Eq. 2c 
         if self.fast_color_thres > 0:
-            mask = (weights > self.fast_color_thres)
+            mask = (weights > self.fast_color_thres)        # weights? 仅要 BB 里边的
             weights = weights[mask]
             alpha = alpha[mask]
             ray_pts = ray_pts[mask]
             ray_id = ray_id[mask]
             step_id = step_id[mask]
 
-        # query for color
+        # query for color       # maybe 7a, 7b
         if self.rgbnet_full_implicit:
             pass
         else:
-            k0 = self.k0(ray_pts)
+            k0 = self.k0(ray_pts)  # line 85 graid
 
         if self.rgbnet is None:
             # no view-depend effect
@@ -356,7 +356,7 @@ class DirectVoxGO(torch.nn.Module):
             viewdirs_emb = torch.cat([viewdirs, viewdirs_emb.sin(), viewdirs_emb.cos()], -1)
             viewdirs_emb = viewdirs_emb.flatten(0,-2)[ray_id]
             rgb_feat = torch.cat([k0_view, viewdirs_emb], -1)
-            rgb_logit = self.rgbnet(rgb_feat)
+            rgb_logit = self.rgbnet(rgb_feat)       # k0 求 color
             if self.rgbnet_direct:
                 rgb = torch.sigmoid(rgb_logit)
             else:
@@ -602,7 +602,7 @@ def get_training_rays_in_maskcache_sampling(rgb_tr_ori, train_poses, HW, Ks, ndc
                 inverse_y=inverse_y, flip_x=flip_x, flip_y=flip_y)
         mask = torch.empty(img.shape[:2], device=DEVICE, dtype=torch.bool)
         for i in range(0, img.shape[0], CHUNK):
-            mask[i:i+CHUNK] = model.hit_coarse_geo(
+            mask[i:i+CHUNK] = model.hit_coarse_geo( # coarse geo
                     rays_o=rays_o[i:i+CHUNK], rays_d=rays_d[i:i+CHUNK], **render_kwargs).to(DEVICE)
         n = mask.sum()
         rgb_tr[top:top+n].copy_(img[mask])

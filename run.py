@@ -311,8 +311,8 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
         ]
     ]
 
-    # find whether there is existing checkpoint path
-    last_ckpt_path = os.path.join(cfg.basedir, cfg.expname, f'{stage}_last.tar')
+    # find whether there is existing checkpoint path    
+    last_ckpt_path = os.path.join(cfg.basedir, cfg.expname, f'{stage}_last.tar')        # stage 确保做 coarse or fine
     if args.no_reload:
         reload_ckpt_path = None
     elif args.ft_path:
@@ -345,7 +345,7 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
         'flip_y': cfg.data.flip_y,
     }
 
-    # init batch rays sampler
+    # init batch rays samplerv **
     def gather_training_rays():
         if data_dict['irregular_shape']:
             rgb_tr_ori = [images[i].to('cpu' if cfg.data.load2gpu_on_the_fly else device) for i in i_train]
@@ -393,7 +393,7 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
         model.update_occupancy_cache_lt_nviews(
                 rays_o_tr, rays_d_tr, imsz, render_kwargs, cfg_train.maskout_lt_nviews)
 
-    # GOGO
+    # GOGO Training
     torch.cuda.empty_cache()
     psnr_lst = []
     time0 = time.time()
@@ -406,8 +406,8 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
 
         # progress scaling checkpoint
         if global_step in cfg_train.pg_scale:
-            n_rest_scales = len(cfg_train.pg_scale)-cfg_train.pg_scale.index(global_step)-1
-            cur_voxels = int(cfg_model.num_voxels / (2**n_rest_scales))
+            n_rest_scales = len(cfg_train.pg_scale)-cfg_train.pg_scale.index(global_step)-1     # pg_scale 控制 voxel 大小
+            cur_voxels = int(cfg_model.num_voxels / (2**n_rest_scales))     # init voxel number
             if isinstance(model, (dvgo.DirectVoxGO, dcvgo.DirectContractedVoxGO)):
                 model.scale_volume_grid(cur_voxels)
             elif isinstance(model, dmpigo.DirectMPIGO):
@@ -442,7 +442,7 @@ def scene_rep_reconstruction(args, cfg, cfg_model, cfg_train, xyz_min, xyz_max, 
             rays_d = rays_d.to(device)
             viewdirs = viewdirs.to(device)
 
-        # volume rendering
+        # volume rendering      # get result, dvgo forward
         render_result = model(
             rays_o, rays_d, viewdirs,
             global_step=global_step, is_train=True,
@@ -536,9 +536,9 @@ def train(args, cfg, data_dict):
 
     # coarse geometry searching (only works for inward bounded scenes)
     eps_coarse = time.time()
-    xyz_min_coarse, xyz_max_coarse = compute_bbox_by_cam_frustrm(args=args, cfg=cfg, **data_dict)
+    xyz_min_coarse, xyz_max_coarse = compute_bbox_by_cam_frustrm(args=args, cfg=cfg, **data_dict)       # find BB box, mipnerf
     if cfg.coarse_train.N_iters > 0:
-        scene_rep_reconstruction(
+        scene_rep_reconstruction(       # Eq. 7a, 7b
                 args=args, cfg=cfg,
                 cfg_model=cfg.coarse_model_and_render, cfg_train=cfg.coarse_train,
                 xyz_min=xyz_min_coarse, xyz_max=xyz_max_coarse,
@@ -553,13 +553,13 @@ def train(args, cfg, data_dict):
 
     # fine detail reconstruction
     eps_fine = time.time()
-    if cfg.coarse_train.N_iters == 0:
-        xyz_min_fine, xyz_max_fine = xyz_min_coarse.clone(), xyz_max_coarse.clone()
+    if cfg.coarse_train.N_iters == 0:   # N_iters = 20000 default config
+        xyz_min_fine, xyz_max_fine = xyz_min_coarse.clone(), xyz_max_coarse.clone()     # copy coarse BB
     else:
         xyz_min_fine, xyz_max_fine = compute_bbox_by_coarse_geo(
                 model_class=dvgo.DirectVoxGO, model_path=coarse_ckpt_path,
                 thres=cfg.fine_model_and_render.bbox_thres)
-    scene_rep_reconstruction(
+    scene_rep_reconstruction(       # fine
             args=args, cfg=cfg,
             cfg_model=cfg.fine_model_and_render, cfg_train=cfg.fine_train,
             xyz_min=xyz_min_fine, xyz_max=xyz_max_fine,
